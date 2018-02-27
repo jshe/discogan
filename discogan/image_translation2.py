@@ -10,18 +10,21 @@ from dataset import *
 from model import *
 import scipy
 from progressbar import ETA, Bar, Percentage, ProgressBar
+from torchvision import transforms, datasets
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
 import time
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of DiscoGAN')
 parser.add_argument('--cuda', type=str, default='true', help='Set cuda usage')
 parser.add_argument('--task_name', type=str, default='facescrub', help='Set data name')
 parser.add_argument('--epoch_size', type=int, default=5000, help='Set epoch size')
-parser.add_argument('--batch_size', type=int, default=64, help='Set batch size')
+parser.add_argument('--batch_size', type=int, default=25, help='Set batch size')
 parser.add_argument('--learning_rate', type=float, default=0.0002, help='Set learning rate for optimizer')
 parser.add_argument('--result_path', type=str, default='./results/', help='Set the path the result images will be saved.')
 parser.add_argument('--model_path', type=str, default='./models/', help='Set the path for trained models')
 parser.add_argument('--model_arch', type=str, default='discogan', help='choose among gan/recongan/discogan. gan - standard GAN, recongan - GAN with reconstruction, discogan - DiscoGAN.')
-parser.add_argument('--image_size', type=int, default=64, help='Image size. 64 for every experiment in the paper')
+parser.add_argument('--image_size', type=int, default=32, help='Image size. 64 for every experiment in the paper')
 
 parser.add_argument('--gan_curriculum', type=int, default=10000, help='Strong GAN loss for certain period at the beginning')
 parser.add_argument('--starting_rate', type=float, default=0.01, help='Set the lambda weight between GAN loss and Recon loss during curriculum period at the beginning. We used the 0.01 weight.')
@@ -38,10 +41,40 @@ parser.add_argument('--log_interval', type=int, default=50, help='Print loss val
 parser.add_argument('--image_save_interval', type=int, default=1000, help='Save test results every image_save_interval iterations.')
 parser.add_argument('--model_save_interval', type=int, default=10000, help='Save models every model_save_interval iterations.')
 
+class UnpairedDataLoader(object):
+    def __init__(self, *loaders):
+        self.loaders = list(loaders)
+
+        self.ltoi_indices = np.argsort([len(loader) for loader in
+            self.loaders])[::-1]
+        self.itol_indices = np.argsort(self.ltoi_indices)
+
+        self.iters = [iter(self.loaders[i]) for i in self.ltoi_indices]
+
+    def __next__(self):
+        data = []
+        for i in range(len(self.iters)):
+            while True:
+                try:
+                    data_i = next(self.iters[i])
+                    break
+                except StopIteration:
+                    if i == 0:
+                        raise StopIteration
+                    self.iters[i] = iter(self.loaders[self.ltoi_indices[i]])
+            data.append(data_i)
+
+        return (data[i] for i in self.itol_indices)
+
+    next = __next__  # Python 2 compatibility
+
+    def __iter__(self):
+        return self
+
 def as_np(data):
     return data.cpu().data.numpy()
 
-def get_data():
+def get_data(batch_size):
     # celebA / edges2shoes / edges2handbags / ...
     if args.task_name == 'facescrub':
         data_A, data_B = get_facescrub_files(test=False, n_test=args.n_test)
@@ -62,13 +95,10 @@ def get_data():
     elif args.task_name == 'handbags2shoes':
         data_A_1, data_A_2 = get_edge2photo_files( item='edges2handbags', test=False )
         test_A_1, test_A_2 = get_edge2photo_files( item='edges2handbags', test=True )
-
         data_A = np.hstack( [data_A_1, data_A_2] )
         test_A = np.hstack( [test_A_1, test_A_2] )
-
         data_B_1, data_B_2 = get_edge2photo_files( item='edges2shoes', test=False )
         test_B_1, test_B_2 = get_edge2photo_files( item='edges2shoes', test=True )
-
         data_B = np.hstack( [data_B_1, data_B_2] )
         test_B = np.hstack( [test_B_1, test_B_2] )
 
@@ -80,7 +110,6 @@ def get_fm_loss(real_feats, fake_feats, criterion):
         l2 = (real_feat.mean(0) - fake_feat.mean(0)) * (real_feat.mean(0) - fake_feat.mean(0))
         loss = criterion( l2, Variable( torch.ones( l2.size() ) ).cuda() )
         losses += loss
-
     return losses
 
 def get_gan_loss(dis_real, dis_fake, criterion, cuda):
@@ -114,6 +143,7 @@ def main():
 
     epoch_size = args.epoch_size
     batch_size = args.batch_size
+    image_size = args.image_size
 
     path_suffix = '{}_{}'.format(args.task_name, time.strftime("%H%_M%_S-%d_%m_%y"))
 
@@ -127,22 +157,59 @@ def main():
         model_path = os.path.join( model_path, args.style_A )
     model_path = os.path.join( model_path, args.model_arch )
 
-    data_style_A, data_style_B, test_style_A, test_style_B = get_data()
+    around_zero_transform = transforms.Compose([
+        transforms.Scale([image_size, image_size]),
+        transforms.RandomCrop(image_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-    if args.task_name.startswith('edges2'):
-        test_A = read_images( test_style_A, 'A', args.image_size )
-        test_B = read_images( test_style_B, 'B', args.image_size )
+    around_zero_transform2 = transforms.Compose([
+        transforms.Scale([image_size, image_size]),
+        transforms.RandomCrop(image_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        transforms.Lambda(lambda x: torch.cat([x, x, x], 0))])
+    dataroot = '.../cycleinfogan/datasets/mnist2svhn'
+    data_style_A = DataLoader(
+        datasets.MNIST(dataroot, train=True, download=True,
+                       transform=around_zero_transform2),
+        batch_size=batch_size, shuffle=True)
+    test_style_A = torch.utils.data.DataLoader(
+        datasets.MNIST(dataroot, train=False,
+                        transform=around_zero_transform2),
+        batch_size=batch_size, shuffle=True)
 
-    elif args.task_name == 'handbags2shoes' or args.task_name == 'shoes2handbags':
-        test_A = read_images( test_style_A, 'B', args.image_size )
-        test_B = read_images( test_style_B, 'B', args.image_size )
+    data_style_B = DataLoader(
+        datasets.SVHN(dataroot, split='train', download=True,
+                      transform=around_zero_transform),
+        batch_size=batch_size, shuffle=True)
+    test_style_B = DataLoader(
+        datasets.SVHN(dataroot, split='test', download=True,
+                      transform=around_zero_transform),
+        batch_size=batch_size, shuffle=True)
 
-    else:
-        test_A = read_images( test_style_A, None, args.image_size )
-        test_B = read_images( test_style_B, None, args.image_size )
-
-    test_A = Variable( torch.FloatTensor( test_A ), volatile=True )
-    test_B = Variable( torch.FloatTensor( test_B ), volatile=True )
+    # data_style_A, data_style_B, test_style_A, test_style_B = get_data(batch_size)
+    #
+    # if args.task_name.startswith('edges2'):
+    #     test_A = read_images( test_style_A, 'A', args.image_size )
+    #     test_B = read_images( test_style_B, 'B', args.image_size )
+    #
+    # elif args.task_name == 'handbags2shoes' or args.task_name == 'shoes2handbags':
+    #     test_A = read_images( test_style_A, 'B', args.image_size )
+    #     test_B = read_images( test_style_B, 'B', args.image_size )
+    #
+    # else:
+    #     test_A = read_images( test_style_A, None, args.image_size )
+    #     test_B = read_images( test_style_B, None, args.image_size )
+    test_A, test_B = torch.Tensor(), torch.Tensor()
+    for i, (real_A, real_B) in enumerate(UnpairedDataLoader(test_style_A, test_style_B)):
+        A, B = real_A[0], real_B[0]
+        test_A = torch.cat([test_A, A], 0)
+        test_B = torch.cat([test_B, B], 0)
+        break
+    test_A, test_B = Variable(test_A), Variable(test_B)
+    # test_A = Variable( torch.FloatTensor( test_A ), volatile=True )
+    # test_B = Variable( torch.FloatTensor( test_B ), volatile=True )
 
     if not os.path.exists(result_path):
         os.makedirs(result_path)
@@ -162,9 +229,10 @@ def main():
         discriminator_A = discriminator_A.cuda()
         discriminator_B = discriminator_B.cuda()
 
-    data_size = min( len(data_style_A), len(data_style_B) )
-    n_batches = ( data_size // batch_size )
-
+    # data_size = min( len(data_style_A), len(data_style_B) )
+    # n_batches = ( data_size // batch_size )
+    n_batches = min( len(data_style_A), len(data_style_B) )
+    data_size = n_batches * batch_size
     recon_criterion = nn.MSELoss()
     gan_criterion = nn.BCELoss()
     feat_criterion = nn.HingeEmbeddingLoss()
@@ -181,36 +249,41 @@ def main():
     dis_loss_total = []
 
     for epoch in range(epoch_size):
-        data_style_A, data_style_B = shuffle_data( data_style_A, data_style_B)
+        # data_style_A, data_style_B = shuffle_data( data_style_A, data_style_B)
 
-        widgets = ['epoch #%d|' % epoch, Percentage(), Bar(), ETA()]
-        pbar = ProgressBar(maxval=n_batches, widgets=widgets)
-        pbar.start()
+        # widgets = ['epoch #%d|' % epoch, Percentage(), Bar(), ETA()]
+        # pbar = ProgressBar(maxval=n_batches, widgets=widgets)
+        # pbar.start()
 
-        for i in range(n_batches):
+        # for i in range(n_batches):
 
-            pbar.update(i)
+
+            # A_path = data_style_A[ i * batch_size: (i+1) * batch_size ]
+            # B_path = data_style_B[ i * batch_size: (i+1) * batch_size ]
+
+            # if args.task_name.startswith( 'edges2' ):
+            #     A = read_images( A_path, 'A', args.image_size )
+            #     B = read_images( B_path, 'B', args.image_size )
+            # elif args.task_name =='handbags2shoes' or args.task_name == 'shoes2handbags':
+            #     A = read_images( A_path, 'B', args.image_size )
+            #     B = read_images( B_path, 'B', args.image_size )
+            # else:
+            #     A = read_images( A_path, None, args.image_size )
+            #     B = read_images( B_path, None, args.image_size )
+        for i, (real_A, real_B) in enumerate(UnpairedDataLoader(data_style_A, data_style_B)):
+            # pbar.update(i)
 
             generator_A.zero_grad()
             generator_B.zero_grad()
             discriminator_A.zero_grad()
             discriminator_B.zero_grad()
 
-            A_path = data_style_A[ i * batch_size: (i+1) * batch_size ]
-            B_path = data_style_B[ i * batch_size: (i+1) * batch_size ]
-
-            if args.task_name.startswith( 'edges2' ):
-                A = read_images( A_path, 'A', args.image_size )
-                B = read_images( B_path, 'B', args.image_size )
-            elif args.task_name =='handbags2shoes' or args.task_name == 'shoes2handbags':
-                A = read_images( A_path, 'B', args.image_size )
-                B = read_images( B_path, 'B', args.image_size )
-            else:
-                A = read_images( A_path, None, args.image_size )
-                B = read_images( B_path, None, args.image_size )
-
-            A = Variable( torch.FloatTensor( A ) )
-            B = Variable( torch.FloatTensor( B ) )
+            A, B = real_A[0], real_B[0]
+            if A.size(0) != B.size(0):
+                continue
+            A, B = Variable(A), Variable(B)
+        # A = Variable( torch.FloatTensor( A ) )
+        # B = Variable( torch.FloatTensor( B ) )
 
             if cuda:
                 A = A.cuda()
@@ -247,8 +320,8 @@ def main():
             else:
                 rate = args.default_rate
 
-            gen_loss_A_total = (gen_loss_B*1 + fm_loss_B*0) * (1.-rate) + recon_loss_A * rate
-            gen_loss_B_total = (gen_loss_A*1 + fm_loss_A*0) * (1.-rate) + recon_loss_B * rate
+            gen_loss_A_total = (gen_loss_B*0.1 + fm_loss_B*0.9) * (1.-rate) + recon_loss_A * rate
+            gen_loss_B_total = (gen_loss_A*0.1 + fm_loss_A*0.9) * (1.-rate) + recon_loss_B * rate
 
             if args.model_arch == 'discogan':
                 gen_loss = gen_loss_A_total + gen_loss_B_total

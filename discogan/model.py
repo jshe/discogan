@@ -33,8 +33,8 @@ class Discriminator(nn.Module):
         self.conv4 = nn.Conv2d(64 * 4, 64 * 8, 4, 2, 1, bias=False)
         self.bn4 = nn.BatchNorm2d(64 * 8)
         self.relu4 = nn.LeakyReLU(0.2, inplace=True)
-
-        self.conv5 = nn.Conv2d(64 * 8, 1, 4, 1, 0, bias=False)
+##      self.conv5 = nn.Conv2d(64 * 8, 1, 4, 1, 0, bias=False)
+        self.conv5 = nn.Conv2d(64 * 8, 1, 2, 1, 0, bias=False)
 
     def forward(self, input):
         conv1 = self.conv1( input )
@@ -127,5 +127,3 @@ class Generator(nn.Module):
 
     def forward(self, input):
         return self.main( input )
-
-
