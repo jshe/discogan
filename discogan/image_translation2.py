@@ -14,6 +14,7 @@ from torchvision import transforms, datasets
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import time
+import torchvision.utils as vutils
 
 parser = argparse.ArgumentParser(description='PyTorch implementation of DiscoGAN')
 parser.add_argument('--cuda', type=str, default='true', help='Set cuda usage')
@@ -363,20 +364,27 @@ def main():
                     os.makedirs( subdir_path )
 
                 for im_idx in range( n_testset ):
-                    A_val = test_A[im_idx].cpu().data.numpy().transpose(1,2,0) * 255.
-                    B_val = test_B[im_idx].cpu().data.numpy().transpose(1,2,0) * 255.
-                    BA_val = BA[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
-                    ABA_val = ABA[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
-                    AB_val = AB[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
-                    BAB_val = BAB[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
-
                     filename_prefix = os.path.join (subdir_path, str(im_idx))
-                    scipy.misc.imsave( filename_prefix + '.A.jpg', A_val.astype(np.uint8)[:,:,::-1])
-                    scipy.misc.imsave( filename_prefix + '.B.jpg', B_val.astype(np.uint8)[:,:,::-1])
-                    scipy.misc.imsave( filename_prefix + '.BA.jpg', BA_val.astype(np.uint8)[:,:,::-1])
-                    scipy.misc.imsave( filename_prefix + '.AB.jpg', AB_val.astype(np.uint8)[:,:,::-1])
-                    scipy.misc.imsave( filename_prefix + '.ABA.jpg', ABA_val.astype(np.uint8)[:,:,::-1])
-                    scipy.misc.imsave( filename_prefix + '.BAB.jpg', BAB_val.astype(np.uint8)[:,:,::-1])
+                    vutils.save_image(test_A[im_idx].data.cpu(), filename_prefix + '.A.jpg')
+                    vutils.save_image(test_B[im_idx].data.cpu(), filename_prefix + '.B.jpg')
+                    vutils.save_image(BA[im_idx].data.cpu(), filename_prefix + '.BA.jpg')
+                    vutils.save_image(ABA[im_idx].data.cpu(), filename_prefix + '.ABA.jpg')
+                    vutils.save_image(AB[im_idx].data.cpu(), filename_prefix + '.AB.jpg')
+                    vutils.save_image(BAB[im_idx].data.cpu(), filename_prefix + '.BAB.jpg')
+                    # A_val = test_A[im_idx].cpu().data.numpy().transpose(1,2,0) * 255.
+                    # B_val = test_B[im_idx].cpu().data.numpy().transpose(1,2,0) * 255.
+                    # BA_val = BA[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
+                    # ABA_val = ABA[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
+                    # AB_val = AB[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
+                    # BAB_val = BAB[im_idx].cpu().data.numpy().transpose(1,2,0)* 255.
+                    #
+                    # filename_prefix = os.path.join (subdir_path, str(im_idx))
+                    # scipy.misc.imsave( filename_prefix + '.A.jpg', A_val.astype(np.uint8)[:,:,::-1])
+                    # scipy.misc.imsave( filename_prefix + '.B.jpg', B_val.astype(np.uint8)[:,:,::-1])
+                    # scipy.misc.imsave( filename_prefix + '.BA.jpg', BA_val.astype(np.uint8)[:,:,::-1])
+                    # scipy.misc.imsave( filename_prefix + '.AB.jpg', AB_val.astype(np.uint8)[:,:,::-1])
+                    # scipy.misc.imsave( filename_prefix + '.ABA.jpg', ABA_val.astype(np.uint8)[:,:,::-1])
+                    # scipy.misc.imsave( filename_prefix + '.BAB.jpg', BAB_val.astype(np.uint8)[:,:,::-1])
 
             if iters % args.model_save_interval == 0:
                 torch.save( generator_A, os.path.join(model_path, 'model_gen_A-' + str( iters / args.model_save_interval )))
